@@ -6,6 +6,7 @@ import { LocationStatus } from './components/LocationStatus';
 import { PrayerTimes, Location } from './types';
 
 const RAMADAN_START_DATE = new Date(2026, 1, 19); // Feb 19, 2026 (Month is 0-indexed)
+const TOTAL_RAMADAN_DAYS = 30; // Force exactly 30 days for safety
 
 const formatTo12h = (time24: string) => {
   if (!time24) return "";
@@ -29,66 +30,69 @@ const App: React.FC = () => {
       setLoading(true);
       setError(null);
       
-      const method = 1; 
-      // We use adjustment -2 to help the API align better, but we will filter manually to be 100% sure.
-      const adjustment = -2; 
-      const hijriYear = 1447;
-      const hijriMonth = 9;
+      const method = 1; // Karachi
+      const year = 2026;
+      const months = [2, 3]; // February and March
 
-      let url = "";
-      if (loc.latitude && loc.longitude && !loc.city) {
-        url = `https://api.aladhan.com/v1/hijriCalendar/${hijriYear}/${hijriMonth}?latitude=${loc.latitude}&longitude=${loc.longitude}&method=${method}&adjustment=${adjustment}`;
-      } else {
-        const address = loc.city || "Gangavathi, India";
-        url = `https://api.aladhan.com/v1/hijriCalendarByAddress/${hijriYear}/${hijriMonth}?address=${encodeURIComponent(address)}&method=${method}&adjustment=${adjustment}`;
-      }
+      const fetchMonth = async (m: number) => {
+        let url = "";
+        if (loc.latitude && loc.longitude && !loc.city) {
+          url = `https://api.aladhan.com/v1/calendar/${year}/${m}?latitude=${loc.latitude}&longitude=${loc.longitude}&method=${method}`;
+        } else {
+          const address = loc.city || "Gangavathi, India";
+          url = `https://api.aladhan.com/v1/calendarByAddress/${year}/${m}?address=${encodeURIComponent(address)}&method=${method}`;
+        }
+        const res = await fetch(url);
+        return res.json();
+      };
 
-      const response = await fetch(url);
-      const result = await response.json();
+      // Fetch both months to cover Feb 19 to March 20
+      const [febRes, marchRes] = await Promise.all([fetchMonth(2), fetchMonth(3)]);
 
-      if (result.code === 200) {
+      if (febRes.code === 200 && marchRes.code === 200) {
         const now = new Date();
         now.setHours(0, 0, 0, 0);
 
-        // Filter and Map: Only keep dates from Feb 19 onwards
-        const rawData: any[] = result.data;
-        const filteredData: PrayerTimes[] = [];
+        const allRawDays = [...febRes.data, ...marchRes.data];
+        const resultDays: PrayerTimes[] = [];
         let dayCounter = 1;
 
-        rawData.forEach((day: any) => {
-          const dateStr = day.date.gregorian.date;
+        for (const day of allRawDays) {
+          const dateStr = day.date.gregorian.date; // "DD-MM-YYYY"
           const [d, m, y] = dateStr.split('-');
           const gDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
           gDate.setHours(0, 0, 0, 0);
 
-          // Only include if date is Feb 19, 2026 or later
-          if (gDate >= RAMADAN_START_DATE) {
-            filteredData.push({
+          // Start collecting from Feb 19
+          if (gDate >= RAMADAN_START_DATE && dayCounter <= TOTAL_RAMADAN_DAYS) {
+            resultDays.push({
               Fajr: formatTo12h(day.timings.Fajr.split(' ')[0]),
               Maghrib: formatTo12h(day.timings.Maghrib.split(' ')[0]),
               date: dateStr,
               readableDate: day.date.gregorian.weekday.en + ', ' + day.date.gregorian.month.en + ' ' + day.date.gregorian.day,
-              hijriDay: dayCounter, // Override with our manual count starting from Feb 19
+              hijriDay: dayCounter,
               hijriMonth: "Ramadan",
               isToday: gDate.getTime() === now.getTime(),
               isPassed: gDate.getTime() < now.getTime(),
             });
             dayCounter++;
           }
-        });
+        }
 
-        setCalendar(filteredData);
+        setCalendar(resultDays);
         
-        if (!loc.city && result.data[0]?.meta?.timezone) {
-          const cityParts = result.data[0].meta.timezone.split('/');
+        // Update location city if detected by API
+        const firstData = febRes.data[0];
+        if (!loc.city && firstData?.meta?.timezone) {
+          const cityParts = firstData.meta.timezone.split('/');
           const city = cityParts[cityParts.length - 1]?.replace('_', ' ') || 'Detected Location';
           setLocation(prev => ({ ...prev!, city }));
         }
       } else {
-        throw new Error("Failed to fetch timing data.");
+        throw new Error("Failed to fetch timing data for the requested period.");
       }
     } catch (err) {
-      setError("Could not retrieve timings. Please try again.");
+      setError("Could not retrieve timings. Please try again later.");
     } finally {
       setLoading(false);
     }
@@ -142,7 +146,7 @@ const App: React.FC = () => {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24">
             <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div>
-            <p className="mt-4 text-slate-500 font-medium tracking-tight">Loading Ramadan 2026 Calendar...</p>
+            <p className="mt-4 text-slate-500 font-medium tracking-tight">Preparing 30-Day Ramadan Calendar...</p>
           </div>
         ) : error ? (
           <div className="bg-white p-10 rounded-[2.5rem] text-center shadow-2xl border border-red-50 max-w-md mx-auto">
@@ -181,15 +185,16 @@ const App: React.FC = () => {
               </section>
             ) : (
               <section className="bg-white rounded-[2.5rem] p-8 shadow-xl border border-emerald-50 text-center">
-                <p className="text-emerald-700 font-bold text-lg mb-2">Ramadan is coming!</p>
-                <p className="text-slate-500 text-sm mb-4">Day 1: <span className="font-black text-slate-800">Thursday, February 19, 2026</span></p>
+                <p className="text-emerald-700 font-bold text-lg mb-2">30-Day Calendar Ready</p>
+                <p className="text-slate-500 text-sm mb-4">Starts on <span className="font-black text-slate-800">Thursday, February 19, 2026</span></p>
+                <p className="text-xs text-slate-400">Ends on Friday, March 20, 2026</p>
               </section>
             )}
 
             <div className="flex items-center justify-between px-2">
-              <h3 className="text-xl font-black text-slate-800 tracking-tight">Full Month Calendar</h3>
+              <h3 className="text-xl font-black text-slate-800 tracking-tight">Full Month Schedule</h3>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full uppercase">Day 1: Feb 19</span>
+                <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full uppercase">Feb 19 — Mar 20</span>
               </div>
             </div>
 
@@ -208,10 +213,10 @@ const App: React.FC = () => {
         <p className="text-slate-400 text-sm font-medium">May Allah accept your fasting and prayers.</p>
         <div className="mt-4 inline-flex flex-col items-center gap-2">
           <p className="text-[10px] text-slate-400 uppercase tracking-widest font-black">
-            Strict Calibration: Feb 19 Start Date Enforced
+            Strict 30-Day Countdown
           </p>
           <p className="text-[9px] text-slate-300 uppercase tracking-widest font-medium">
-            1447 AH • University of Islamic Sciences, Karachi
+            2026 Gregorian Cycle • Location: {location?.city}
           </p>
         </div>
       </footer>
