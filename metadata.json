@@ -1,0 +1,7 @@
+{
+  "name": "Ramadan Kareem Calendar",
+  "description": "A beautiful, responsive Ramadan calendar providing precise Sehar and Iftar timings based on your current location.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
