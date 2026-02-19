@@ -5,14 +5,15 @@ import { DayCard } from './components/DayCard';
 import { LocationStatus } from './components/LocationStatus';
 import { PrayerTimes, Location } from './types';
 
-// Utility to convert 24h string (e.g., "05:15") to 12h format (e.g., "5:15 AM")
+const RAMADAN_START_DATE = new Date(2026, 1, 19); // Feb 19, 2026 (Month is 0-indexed)
+
 const formatTo12h = (time24: string) => {
   if (!time24) return "";
   const [hoursStr, minutes] = time24.split(':');
   let hours = parseInt(hoursStr, 10);
   const ampm = hours >= 12 ? 'PM' : 'AM';
   hours = hours % 12;
-  hours = hours ? hours : 12; // the hour '0' should be '12'
+  hours = hours ? hours : 12;
   return `${hours}:${minutes} ${ampm}`;
 };
 
@@ -28,14 +29,13 @@ const App: React.FC = () => {
       setLoading(true);
       setError(null);
       
-      let url = "";
-      // Method 1: University of Islamic Sciences, Karachi (India/Pakistan Standard)
-      // adjustment=-1: Delays the Hijri month start by 1 day to align 1st Ramadan with Feb 19, 2026.
       const method = 1; 
-      const adjustment = -1; 
+      // We use adjustment -2 to help the API align better, but we will filter manually to be 100% sure.
+      const adjustment = -2; 
       const hijriYear = 1447;
       const hijriMonth = 9;
 
+      let url = "";
       if (loc.latitude && loc.longitude && !loc.city) {
         url = `https://api.aladhan.com/v1/hijriCalendar/${hijriYear}/${hijriMonth}?latitude=${loc.latitude}&longitude=${loc.longitude}&method=${method}&adjustment=${adjustment}`;
       } else {
@@ -47,28 +47,37 @@ const App: React.FC = () => {
       const result = await response.json();
 
       if (result.code === 200) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
 
-        const data: PrayerTimes[] = result.data.map((day: any) => {
+        // Filter and Map: Only keep dates from Feb 19 onwards
+        const rawData: any[] = result.data;
+        const filteredData: PrayerTimes[] = [];
+        let dayCounter = 1;
+
+        rawData.forEach((day: any) => {
           const dateStr = day.date.gregorian.date;
           const [d, m, y] = dateStr.split('-');
-          const gregorianDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-          gregorianDate.setHours(0, 0, 0, 0);
+          const gDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+          gDate.setHours(0, 0, 0, 0);
 
-          return {
-            Fajr: formatTo12h(day.timings.Fajr.split(' ')[0]),
-            Maghrib: formatTo12h(day.timings.Maghrib.split(' ')[0]),
-            date: dateStr,
-            readableDate: day.date.gregorian.weekday.en + ', ' + day.date.gregorian.month.en + ' ' + day.date.gregorian.day,
-            hijriDay: parseInt(day.date.hijri.day),
-            hijriMonth: day.date.hijri.month.en,
-            isToday: gregorianDate.getTime() === today.getTime(),
-            isPassed: gregorianDate.getTime() < today.getTime(),
-          };
+          // Only include if date is Feb 19, 2026 or later
+          if (gDate >= RAMADAN_START_DATE) {
+            filteredData.push({
+              Fajr: formatTo12h(day.timings.Fajr.split(' ')[0]),
+              Maghrib: formatTo12h(day.timings.Maghrib.split(' ')[0]),
+              date: dateStr,
+              readableDate: day.date.gregorian.weekday.en + ', ' + day.date.gregorian.month.en + ' ' + day.date.gregorian.day,
+              hijriDay: dayCounter, // Override with our manual count starting from Feb 19
+              hijriMonth: "Ramadan",
+              isToday: gDate.getTime() === now.getTime(),
+              isPassed: gDate.getTime() < now.getTime(),
+            });
+            dayCounter++;
+          }
         });
 
-        setCalendar(data);
+        setCalendar(filteredData);
         
         if (!loc.city && result.data[0]?.meta?.timezone) {
           const cityParts = result.data[0].meta.timezone.split('/');
@@ -76,10 +85,10 @@ const App: React.FC = () => {
           setLocation(prev => ({ ...prev!, city }));
         }
       } else {
-        throw new Error("Failed to fetch timing data for this location.");
+        throw new Error("Failed to fetch timing data.");
       }
     } catch (err) {
-      setError("Could not retrieve timings. Please try a different location or check your connection.");
+      setError("Could not retrieve timings. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -94,13 +103,12 @@ const App: React.FC = () => {
   useEffect(() => {
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const { latitude, longitude } = position.coords;
-          const initialLoc = { latitude, longitude };
+        (position) => {
+          const initialLoc = { latitude: position.coords.latitude, longitude: position.coords.longitude };
           setLocation(initialLoc);
           fetchCalendarData(initialLoc);
         },
-        (err) => {
+        () => {
           const defaultLoc = { latitude: 15.4321, longitude: 76.5322, city: 'Gangavathi' };
           setLocation(defaultLoc);
           fetchCalendarData(defaultLoc);
@@ -134,7 +142,7 @@ const App: React.FC = () => {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24">
             <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div>
-            <p className="mt-4 text-slate-500 font-medium tracking-tight">Syncing with South Asia sighting standards...</p>
+            <p className="mt-4 text-slate-500 font-medium tracking-tight">Loading Ramadan 2026 Calendar...</p>
           </div>
         ) : error ? (
           <div className="bg-white p-10 rounded-[2.5rem] text-center shadow-2xl border border-red-50 max-w-md mx-auto">
@@ -143,22 +151,14 @@ const App: React.FC = () => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
             </div>
-            <p className="text-red-600 font-black text-lg mb-2">Location Error</p>
+            <p className="text-red-600 font-black text-lg mb-2">Error</p>
             <p className="text-slate-500 text-sm mb-8 leading-relaxed">{error}</p>
-            <button 
-              onClick={() => window.location.reload()} 
-              className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all active:scale-95"
-            >
-              Try Again
-            </button>
+            <button onClick={() => window.location.reload()} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold">Try Again</button>
           </div>
         ) : (
           <div className="space-y-8">
-            {todayData && (
-              <section className="bg-emerald-900 rounded-[2.5rem] p-8 text-white shadow-2xl shadow-emerald-200 relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-8 opacity-10">
-                   <svg className="w-24 h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6-2zm0 8h2v2h-2z" /></svg>
-                </div>
+            {todayData ? (
+              <section className="bg-emerald-900 rounded-[2.5rem] p-8 text-white shadow-2xl relative overflow-hidden">
                 <div className="relative z-10">
                   <span className="bg-emerald-500/30 text-emerald-200 text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border border-emerald-500/30">Today • Day {todayData.hijriDay}</span>
                   <h2 className="text-3xl font-bold mt-4 mb-8">Ramadan Timings</h2>
@@ -174,16 +174,23 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   
-                  <button onClick={scrollToToday} className="mt-8 w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-white font-bold rounded-2xl transition-all active:scale-95 shadow-lg shadow-emerald-900/40">
-                    View Full Month
+                  <button onClick={scrollToToday} className="mt-8 w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-white font-bold rounded-2xl transition-all">
+                    View My Position
                   </button>
                 </div>
+              </section>
+            ) : (
+              <section className="bg-white rounded-[2.5rem] p-8 shadow-xl border border-emerald-50 text-center">
+                <p className="text-emerald-700 font-bold text-lg mb-2">Ramadan is coming!</p>
+                <p className="text-slate-500 text-sm mb-4">Day 1: <span className="font-black text-slate-800">Thursday, February 19, 2026</span></p>
               </section>
             )}
 
             <div className="flex items-center justify-between px-2">
               <h3 className="text-xl font-black text-slate-800 tracking-tight">Full Month Calendar</h3>
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Feb - Mar 2026</div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full uppercase">Day 1: Feb 19</span>
+              </div>
             </div>
 
             <div className="flex flex-col gap-4">
@@ -200,15 +207,11 @@ const App: React.FC = () => {
       <footer className="mt-16 text-center px-4">
         <p className="text-slate-400 text-sm font-medium">May Allah accept your fasting and prayers.</p>
         <div className="mt-4 inline-flex flex-col items-center gap-2">
-          <div className="px-4 py-2 bg-slate-100 rounded-full text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-            <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse inline-block mr-2"></span>
-            Verified for {location?.city || 'Selected Location'}
-          </div>
-          <p className="mt-2 text-[10px] text-slate-400 uppercase tracking-widest font-black max-w-xs mx-auto">
-            Source: University of Islamic Sciences, Karachi (India/Pakistan Standard)
+          <p className="text-[10px] text-slate-400 uppercase tracking-widest font-black">
+            Strict Calibration: Feb 19 Start Date Enforced
           </p>
           <p className="text-[9px] text-slate-300 uppercase tracking-widest font-medium">
-            AlAdhan Timing Engine • Hijri Adjustment Applied • 1447 AH
+            1447 AH • University of Islamic Sciences, Karachi
           </p>
         </div>
       </footer>
